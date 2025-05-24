@@ -1,0 +1,216 @@
+name: stock_project_group
+
+services:
+
+  dev_spg:
+    container_name: dev_spg
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    ports:
+      - "22022:22"   # SSH access
+      - "4040:4040"  # Spark UI
+      - "4041:4041"
+      - "4042:4042"
+    volumes:
+      - ../workspace/:/project/workspace_dev/
+    working_dir: /project/workspace_dev/
+    env_file:
+      - ../.env
+    networks:
+      - net_stock_project
+
+
+  producer_spg:
+    container_name: producer_spg
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.producer
+    image: producer_spg:latest
+    env_file:
+      - ../.env
+    working_dir: /project/producer_app
+    depends_on:
+      - kafka_spg
+    networks:
+      - net_stock_project
+    ports:
+      - "22023:22"
+    stdin_open: true
+    tty: true    
+
+  consumer_spg:
+    container_name: consumer_spg
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.consumer
+    image: consumer_spg:latest
+    env_file:
+      - ../.env
+    working_dir: /project/consumer_app
+    depends_on:
+      - kafka_spg
+    networks:
+      - net_stock_project
+    ports:
+      - "22028:22"
+    stdin_open: true
+    tty: true
+
+  zookeeper_spg:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper_spg
+    ports:
+      - "2182:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - net_stock_project
+
+  kafka_spg:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka_spg
+    depends_on:
+      - zookeeper_spg
+    ports:
+      - "9093:9093"  # Port pour l'hôte
+      - "9092:9092"  # Port pour les containers
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper_spg:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka_spg:9092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+    networks:
+      - net_stock_project
+
+  kafdrop_spg:
+    image: obsidiandynamics/kafdrop:3.30.0
+    container_name: kafdrop_spg
+    depends_on:
+      - kafka_spg
+    ports:
+      - "9003:9000"
+    environment:
+      KAFKA_BROKERCONNECT: kafka_spg:9092
+    networks:
+      - net_stock_project
+
+  minio_spg:
+    image: bitnami/minio:latest
+    container_name: minio_spg
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    env_file:
+      - ../.env
+    volumes:
+      - ../minio_data:/bitnami/minio/data
+    networks:
+      - net_stock_project
+
+
+  postgres_spg:
+    image: postgres:13
+    container_name: postgres_spg
+    env_file:
+      - ../.env
+    volumes:
+      - postgres_db:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - net_stock_project
+
+  airflow_init_spg:
+    image: apache/airflow:2.8.1
+    container_name: airflow_init_spg
+    restart: on-failure
+    env_file:
+      - ../.env
+    environment:
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:postgres@postgres_spg:5432/airflow
+    volumes:
+      - ../workspace/airflow/dags:/opt/airflow/dags
+      - ../workspace/airflow/logs:/opt/airflow/logs
+      - ../workspace/airflow/plugins:/opt/airflow/plugins
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../.env:/opt/airflow/.env
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        echo "🔧 Initializing Airflow DB..."
+        airflow db init &&
+        echo "👤 Creating Airflow admin user..."
+        airflow users create \
+          --username airflow \
+          --password airflow \
+          --firstname airflow \
+          --lastname admin \
+          --role Admin \
+          --email airflow@example.com
+    depends_on:
+      - postgres_spg
+    networks:
+      - net_stock_project
+
+  airflow_webserver_spg:
+    image: apache/airflow:2.8.1
+    container_name: airflow_webserver_spg
+    restart: always
+    env_file:
+      - ../.env
+    environment:
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:postgres@postgres_spg:5432/airflow
+    volumes:
+      - ../workspace/airflow/dags:/opt/airflow/dags
+      - ../workspace/airflow/logs:/opt/airflow/logs
+      - ../workspace/airflow/plugins:/opt/airflow/plugins
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../.env:/opt/airflow/.env
+      - ./requirements/requirements_airflow.txt:/opt/airflow/requirements.txt
+      
+
+    ports:
+      - "8082:8080"
+    depends_on:
+      - airflow_init_spg
+      - postgres_spg
+    command: >
+      bash -c "pip install -r /opt/airflow/requirements.txt && airflow webserver"
+    networks:
+      - net_stock_project
+
+  airflow_scheduler_spg:
+    image: apache/airflow:2.8.1
+    container_name: airflow_scheduler_spg
+    restart: always
+    env_file:
+      - ../.env
+    environment:
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:postgres@postgres_spg:5432/airflow
+    volumes:
+      - ../workspace/airflow/dags:/opt/airflow/dags
+      - ../workspace/airflow/logs:/opt/airflow/logs
+      - ../workspace/airflow/plugins:/opt/airflow/plugins
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../.env:/opt/airflow/.env
+    depends_on:
+      - airflow_init_spg
+      - postgres_spg
+    command: airflow scheduler
+    networks:
+      - net_stock_project
+ 
+networks:
+  net_stock_project:
+    name: net_stock_project
+    driver: bridge
+
+volumes:
+  postgres_db:

@@ -1,0 +1,31 @@
+FROM python:3.10-slim
+
+# Install SSH server
+RUN apt-get update && apt-get install -y openssh-server && \
+    mkdir /var/run/sshd && apt-get clean
+
+# Set root password
+RUN echo 'root:root' | chpasswd
+
+# Enable SSH login for root
+RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config && \
+    mkdir -p /root/.ssh && chmod 700 /root/.ssh
+
+# Set working directory at the app root level
+WORKDIR /project/producer_app
+
+
+# Copy full structure as-is
+COPY ../workspace/config.py ./config.py
+COPY ../workspace/producer ./producer
+COPY ../workspace/finance ./finance
+COPY ../workspace/schemas ./schemas
+COPY docker/requirements/requirements_producer.txt ./requirements.txt
+
+# Install dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Default command: run main_producer.py like module inside the producer folder 
+CMD ["python", "-m", "producer.main_producer"]

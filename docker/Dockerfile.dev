@@ -1,0 +1,76 @@
+FROM python:3.11
+
+# -------------------------------
+# Spark and Java environment
+# -------------------------------
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV SPARK_VERSION=3.5.0
+ENV HADOOP_VERSION=3
+ENV SPARK_HOME=/opt/spark
+ENV PATH="$SPARK_HOME/bin:$PATH"
+
+# -------------------------------
+# System packages
+# -------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openjdk-17-jdk-headless \
+    curl wget git nano sudo \
+    openssh-server \
+    build-essential \
+    dos2unix \
+    file \
+    && rm -rf /var/lib/apt/lists/*
+
+# -------------------------------
+# SSH setup
+# -------------------------------
+RUN mkdir -p /var/run/sshd && \
+    echo 'root:root' | chpasswd && \
+    sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+    sed -i 's@session\\s*required\\s*pam_loginuid.so@session optional pam_loginuid.so@g' /etc/pam.d/sshd && \
+    ssh-keygen -A
+
+# -------------------------------
+# Install Apache Spark
+# -------------------------------
+RUN wget https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz && \
+    tar -xzf spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz -C /opt && \
+    mv /opt/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION} /opt/spark && \
+    rm spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz
+
+# -------------------------------
+# Working directory
+# -------------------------------
+WORKDIR /project/workspace_dev
+
+# -------------------------------
+# Create Python virtual environment
+# -------------------------------
+RUN python3 -m venv .venv
+
+# -------------------------------
+# Auto-activate virtual environment on login
+# -------------------------------
+RUN echo '\n# Auto-activate venv' >> /root/.bashrc && \
+    echo 'if [ -f /project/workspace_dev/.venv/bin/activate ]; then' >> /root/.bashrc && \
+    echo '  source /project/workspace_dev/.venv/bin/activate' >> /root/.bashrc && \
+    echo 'fi' >> /root/.bashrc
+
+# -------------------------------
+# Copy custom entrypoint
+# -------------------------------
+COPY docker/entrypoints/entrypoint_dev.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# -------------------------------
+# Expose ports
+# -------------------------------
+EXPOSE 22
+EXPOSE 4040
+EXPOSE 4041
+EXPOSE 4042
+
+# -------------------------------
+# Launch container
+# -------------------------------
+CMD ["/entrypoint.sh"]
